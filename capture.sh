@@ -11,7 +11,6 @@ sleep 1
 
 for dest in "${dests[@]}"
 do
-    # Use openssl s_client to connect to the destination
     openssl s_client -connect $dest:443
     curl https://$dest
 done
