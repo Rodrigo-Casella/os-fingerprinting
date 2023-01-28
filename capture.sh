@@ -1,7 +1,7 @@
 #!/bin/bash
 
 bpf_filter='tcp[tcpflags] == tcp-syn or (tcp[tcp[12]/16*4] == 22 and (tcp[tcp[12]/16*4+5] == 1))'
-dests=("www.google.com" "www.youtube.com" "www.unipi.it")
+dests=("www.google.com" "www.github.com" "www.unipi.it")
 capture_file="./capture.pcap"
 
 tcpdump -i eth0 -w $capture_file $bpf_filter &
@@ -11,8 +11,7 @@ sleep 1
 
 for dest in "${dests[@]}"
 do
-    openssl s_client -connect $dest:443
-    curl https://$dest
+    curl -s https://$dest > /dev/null
 done
 
 sleep 2
