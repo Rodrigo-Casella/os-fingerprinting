@@ -10,8 +10,8 @@ DLT_RAW = 101
 
 FEATURES_LIST = set(["TLS Cipher List", "TCP/IP Features"])
 
-GREASE_EXT_GRP = [2570, 6682, 10794, 14906, 19018, 23130,
-                  27242, 31354, 35466, 39578, 43690, 47802, 51914, 56026, 60138, 64250]
+GREASE_EXT_GRP = [2570, 6682, 10794, 14906, 19018, 23130, 27242,
+                  31354, 35466, 39578, 43690, 47802, 51914, 56026, 60138, 64250]
 
 GREASE_CIPHER = [0x0a0a, 0x1a1a, 0x2a2a, 0x3a3a, 0x4a4a, 0x5a5a, 0x6a6a,
                  0x7a7a, 0x8a8a, 0x9a9a, 0xaaaa, 0xbaba, 0xcaca, 0xdada, 0xeaea, 0xfafa]
@@ -52,20 +52,27 @@ def dump_pcap(pcap):
     linktype = capture.datalink()
     if linktype not in [dpkt.pcap.DLT_EN10MB, DLT_RAW]:
         print("Datalink is not Ethernet or Raw: " + f'{capture.datalink()}')
-        return None
+        return {}
 
-    flows = {}
+    flows: dict[str, dict] = {}
+    
+    decoder = dpkt.ethernet.Ethernet
+    
+    if linktype == DLT_RAW:
+        decoder = dpkt.ip.IP
+        
     for ts, buf in capture:
-        if linktype == DLT_RAW:
-            try:
-                pkt_data = dpkt.ip.IP(buf)
-            except dpkt.UnpackError:
-                continue   
-        else:
-            pkt_data = dpkt.ethernet.Ethernet(buf).data
-            if not isinstance(pkt_data, dpkt.ip.IP):
-                continue
-
+        try:
+            pkt_data = decoder(buf)
+        except dpkt.UnpackError:
+            continue
+        
+        if isinstance(pkt_data, dpkt.ethernet.Ethernet):
+            pkt_data = pkt_data.data
+            
+        if not isinstance(pkt_data, dpkt.ip.IP):
+            continue
+            
         if not isinstance(pkt_data.data, dpkt.tcp.TCP):
             continue
 
@@ -73,9 +80,9 @@ def dump_pcap(pcap):
         tcp = ip.data
 
         flow = f'{socket.inet_ntop(socket.AF_INET, ip.src)}:{tcp.sport} -> {socket.inet_ntop(socket.AF_INET, ip.dst)}:{tcp.dport}'
-        
-        pkt_features = {}
-        
+
+        pkt_features: dict[str, str] = {}
+
         if tcp.flags == dpkt.tcp.TH_SYN:
             add_ip_tcp_param_to_dict(pkt_features, ip, tcp)
         elif len(tcp.data) > 0 and tcp.data[0] == TLS_HANDSHAKE:
@@ -92,11 +99,13 @@ def dump_pcap(pcap):
 
                 add_tls_param_to_dict(pkt_features, handshake.data)
 
-        if flow not in flows:
-            flows[flow] = pkt_features
-        elif pkt_features != {}:
+        if pkt_features == {}:
+            continue
+        
+        if flow in flows:
             pkt_features.update(flows.get(flow))
-            flows[flow] = pkt_features
+            
+        flows[flow] = pkt_features
 
     for flow, features in flows.copy().items():
         if FEATURES_LIST.difference(features.keys()) != set():
@@ -132,9 +141,9 @@ def produce_sign(input):
     max_rep = []
     for k, path in sorted(tree.maximal_repeats()):
         max_rep.append(f'{k}: ' + str(path).replace(' ', ','))
-        
+
     signatures.append(max_rep)
-    
+
     with open("sign.json", "w") as outfile:
         json_data = json.dumps(signatures, indent=1)
         outfile.write(json_data)
