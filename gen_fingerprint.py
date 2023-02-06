@@ -2,6 +2,7 @@ import sys
 import json
 import dpkt
 import socket
+import struct
 from suffix_tree import Tree
 
 TLS_HANDSHAKE = 22
@@ -38,8 +39,15 @@ def add_tls_param_to_dict(pkt_features: dict, tls_client_hello: dpkt.ssl.TLSClie
     for cipher in cipher_list.copy():
         if cipher.code in GREASE_CIPHER:
             cipher_list.remove(cipher)
+
     ciphersuites = ','.join([hex(x.code) for x in cipher_list])
     pkt_features.update({"TLS Cipher List": ciphersuites})
+
+
+def write_dict_to_json(filename: str, dict: dict):
+    with open(filename, "w") as outfile:
+        json_data = json.dumps(dict, indent=1)
+        outfile.write(json_data)
 
 
 def dump_pcap(pcap):
@@ -55,24 +63,24 @@ def dump_pcap(pcap):
         return {}
 
     flows: dict[str, dict] = {}
-    
+
     decoder = dpkt.ethernet.Ethernet
-    
+
     if linktype == DLT_RAW:
         decoder = dpkt.ip.IP
-        
+
     for ts, buf in capture:
         try:
             pkt_data = decoder(buf)
         except dpkt.UnpackError:
             continue
-        
+
         if isinstance(pkt_data, dpkt.ethernet.Ethernet):
             pkt_data = pkt_data.data
-            
+
         if not isinstance(pkt_data, dpkt.ip.IP):
             continue
-            
+
         if not isinstance(pkt_data.data, dpkt.tcp.TCP):
             continue
 
@@ -101,21 +109,42 @@ def dump_pcap(pcap):
 
         if pkt_features == {}:
             continue
-        
+
         if flow in flows:
+            if pkt_features.keys() == flows.get(flow).keys():
+                continue
             pkt_features.update(flows.get(flow))
-            
+
         flows[flow] = pkt_features
 
-    for flow, features in flows.copy().items():
-        if FEATURES_LIST.difference(features.keys()) != set():
-            flows.pop(flow)
-
-    with open("flows.json", "w") as outfile:
-        json_data = json.dumps(flows, indent=1)
-        outfile.write(json_data)
+    write_dict_to_json("flows.json", flows)
 
     return flows
+
+
+def add_to_set_from_key(set: set, dict: dict, key):
+    value = dict.get(key)
+    if value != None:
+        set.add(value)
+
+
+def get_max_rep_from_str_list(list: str, sep=','):
+    """Get a list of maximal repeats from a list of string with elements separated by a delimiter string.
+    
+        The list will have only maximal repeats with more than one element.
+    """
+    tree = Tree()
+
+    for idx, elems in enumerate(list):
+        elem_list = [elem for elem in elems.split(sep)]
+        tree.add(idx, elem_list)
+
+    max_rep = []
+    for k, path in sorted(tree.maximal_repeats()):
+        if len(path) < 2:
+            continue
+        max_rep.append(f'{k}: ' + str(path).replace(' ', ','))
+    return max_rep
 
 
 def produce_sign(input):
@@ -124,29 +153,28 @@ def produce_sign(input):
         print("No flows detected")
         return
 
-    signatures = []
+    signatures = {"TCP/IP Features": [],
+                  "TLS Cipher List": [], "Ciphers Max Repeats": []}
+    tcp_ip_set = set()
+    ciphers_set = set()
+
     for features in flows.values():
-        if features not in signatures:
-            signatures.append(features)
+        add_to_set_from_key(tcp_ip_set, features, "TCP/IP Features")
+        add_to_set_from_key(ciphers_set, features, "TLS Cipher List")
+
+    signatures["TCP/IP Features"] = list(tcp_ip_set)
+    signatures["TLS Cipher List"] = list(ciphers_set)
+
     print("Total Flows: " + f'{len(flows)}')
-    print("Total Signatures: " + f'{len(signatures)}')
+    print("Total Unique TCP/IP Features: " +
+          f'{len(signatures["TCP/IP Features"])}')
+    print("Total Unique TLS Ciphersuites Lists: " +
+          f'{len(signatures["TLS Cipher List"])}')
 
-    ciphersuites = [x["TLS Cipher List"] for x in signatures]
-    tree = Tree()
+    signatures["Ciphers Max Repeats"] = get_max_rep_from_str_list(
+        signatures["TLS Cipher List"])
 
-    for idx, ciphersuite in enumerate(ciphersuites):
-        hex_cipher = [cipher for cipher in ciphersuite.split(',')]
-        tree.add(idx, hex_cipher)
-
-    max_rep = []
-    for k, path in sorted(tree.maximal_repeats()):
-        max_rep.append(f'{k}: ' + str(path).replace(' ', ','))
-
-    signatures.append(max_rep)
-
-    with open("sign.json", "w") as outfile:
-        json_data = json.dumps(signatures, indent=1)
-        outfile.write(json_data)
+    write_dict_to_json("sign.json", signatures)
 
 
 def main():
