@@ -1,8 +1,8 @@
 import sys
 import json
+from typing import List
 import dpkt
-import socket
-import struct
+import argparse
 from suffix_tree import Tree
 
 TLS_HANDSHAKE = 22
@@ -18,8 +18,8 @@ GREASE_CIPHER = [0x0a0a, 0x1a1a, 0x2a2a, 0x3a3a, 0x4a4a, 0x5a5a, 0x6a6a,
                  0x7a7a, 0x8a8a, 0x9a9a, 0xaaaa, 0xbaba, 0xcaca, 0xdada, 0xeaea, 0xfafa]
 
 
-def add_ip_tcp_param_to_dict(pkt_features: dict, ip_hdr: dpkt.ip.IP, tcp_hdr: dpkt.tcp.TCP):
-    tcp_ip_features = ','.join(map(str, [ip_hdr.ttl, tcp_hdr.win]))
+def tcp_ip_param2str(ip_hdr: dpkt.ip.IP, tcp_hdr: dpkt.tcp.TCP):
+    tcp_ip_features_str = ','.join(map(str, [ip_hdr.ttl, tcp_hdr.win]))
 
     tcp_options = []
     for option in dpkt.tcp.parse_opts(tcp_hdr.opts):
@@ -28,41 +28,32 @@ def add_ip_tcp_param_to_dict(pkt_features: dict, ip_hdr: dpkt.ip.IP, tcp_hdr: dp
         else:
             tcp_options.append((option[0], int.from_bytes(option[1], 'big')))
 
-    tcp_ip_features = ','.join(
-        [tcp_ip_features, '-'.join(map(str, tcp_options))])
-    pkt_features.update({"TCP/IP Features": tcp_ip_features})
+    tcp_ip_features_str = ','.join(
+        [tcp_ip_features_str, '-'.join(map(str, tcp_options))])
+
+    return tcp_ip_features_str
 
 
-def add_tls_param_to_dict(pkt_features: dict, tls_client_hello: dpkt.ssl.TLSClientHello):
+def tls_param2list_of_str(tls_client_hello: dpkt.ssl.TLSClientHello):
     cipher_list = tls_client_hello.ciphersuites
 
     for cipher in cipher_list.copy():
         if cipher.code in GREASE_CIPHER:
             cipher_list.remove(cipher)
 
-    ciphersuites = ','.join([hex(x.code) for x in cipher_list])
-    pkt_features.update({"TLS Cipher List": ciphersuites})
+    ciphersuites = [hex(x.code) for x in cipher_list]
+    return ciphersuites
 
 
-def write_dict_to_json(filename: str, dict: dict):
-    with open(filename, "w") as outfile:
-        json_data = json.dumps(dict, indent=1)
-        outfile.write(json_data)
-
-
-def dump_pcap(pcap):
-    fp = open(pcap, "rb")
-    try:
-        capture = dpkt.pcap.Reader(fp)
-    except ValueError as pcap_err:
-        raise pcap_err
-
+def extract_features_from_pcap(capture):
     linktype = capture.datalink()
+
     if linktype not in [dpkt.pcap.DLT_EN10MB, DLT_RAW]:
         print("Datalink is not Ethernet or Raw: " + f'{capture.datalink()}')
-        return {}
+        return None
 
-    flows: dict[str, dict] = {}
+    tcp_ip_param_list: "list[str]" = []
+    tls_param_list: "list[list[str]]" = []
 
     decoder = dpkt.ethernet.Ethernet
 
@@ -87,12 +78,10 @@ def dump_pcap(pcap):
         ip = pkt_data
         tcp = ip.data
 
-        flow = f'{socket.inet_ntop(socket.AF_INET, ip.src)}:{tcp.sport} -> {socket.inet_ntop(socket.AF_INET, ip.dst)}:{tcp.dport}'
-
-        pkt_features: dict[str, str] = {}
-
         if tcp.flags == dpkt.tcp.TH_SYN:
-            add_ip_tcp_param_to_dict(pkt_features, ip, tcp)
+            tcp_ip_str = tcp_ip_param2str(ip, tcp)
+            if tcp_ip_str not in tcp_ip_param_list:
+                tcp_ip_param_list.append(tcp_ip_str)
         elif len(tcp.data) > 0 and tcp.data[0] == TLS_HANDSHAKE:
             try:
                 record = dpkt.ssl.TLSRecord(tcp.data)
@@ -105,84 +94,141 @@ def dump_pcap(pcap):
                 except dpkt.ssl.SSL3Exception:
                     continue
 
-                add_tls_param_to_dict(pkt_features, handshake.data)
+                tls_str = tls_param2list_of_str(handshake.data)
+                if tls_str not in tls_param_list:
+                    tls_param_list.append(tls_str)
 
-        if pkt_features == {}:
-            continue
-
-        if flow in flows:
-            if pkt_features.keys() == flows.get(flow).keys():
-                continue
-            pkt_features.update(flows.get(flow))
-
-        flows[flow] = pkt_features
-
-    write_dict_to_json("flows.json", flows)
-
-    return flows
+    return (tcp_ip_param_list, tls_param_list)
 
 
-def add_to_set_from_key(set: set, dict: dict, key):
-    value = dict.get(key)
-    if value != None:
-        set.add(value)
+def get_max_rep_from_list_of_lists(list_of_lists: "list[list[str]]", sep: "str | None" = ","):
+    """Get a list of maximal repeats from a set of lists of strings.
 
-
-def get_max_rep_from_str_list(list: str, sep=','):
-    """Get a list of maximal repeats from a list of string with elements separated by a delimiter string.
-    
         The list will have only maximal repeats with more than one element.
     """
     tree = Tree()
 
-    for idx, elems in enumerate(list):
-        elem_list = [elem for elem in elems.split(sep)]
-        tree.add(idx, elem_list)
+    for idx, lst in enumerate(list_of_lists):
+        tree.add(idx, lst)
 
     max_rep = []
     for k, path in sorted(tree.maximal_repeats()):
         if len(path) < 2:
             continue
-        max_rep.append(f'{k}: ' + str(path).replace(' ', ','))
+        max_rep.append(str(path).replace(' ', sep))
     return max_rep
 
 
-def produce_sign(input):
-    flows = dump_pcap(input)
-    if flows == {}:
-        print("No flows detected")
-        return
+def produce_fingeprint(capture):
+    features = extract_features_from_pcap(capture)
+    if features is None:
+        print("No features extracted")
+        return None
 
-    signatures = {"TCP/IP Features": [],
-                  "TLS Cipher List": [], "Ciphers Max Repeats": []}
-    tcp_ip_set = set()
-    ciphers_set = set()
+    fingerprint = {"TCP/IP Features": [], "Ciphers Max Repeats": []}
 
-    for features in flows.values():
-        add_to_set_from_key(tcp_ip_set, features, "TCP/IP Features")
-        add_to_set_from_key(ciphers_set, features, "TLS Cipher List")
+    fingerprint["TCP/IP Features"] = list(features[0])
 
-    signatures["TCP/IP Features"] = list(tcp_ip_set)
-    signatures["TLS Cipher List"] = list(ciphers_set)
+    fingerprint["Ciphers Max Repeats"] = get_max_rep_from_list_of_lists(
+        features[1])
 
-    print("Total Flows: " + f'{len(flows)}')
     print("Total Unique TCP/IP Features: " +
-          f'{len(signatures["TCP/IP Features"])}')
-    print("Total Unique TLS Ciphersuites Lists: " +
-          f'{len(signatures["TLS Cipher List"])}')
+          f'{len(fingerprint["TCP/IP Features"])}')
+    print("Maximal repeats in TLS Ciphersuites Lists: " +
+          f'{len(fingerprint["Ciphers Max Repeats"])}')
 
-    signatures["Ciphers Max Repeats"] = get_max_rep_from_str_list(
-        signatures["TLS Cipher List"])
+    return fingerprint
 
-    write_dict_to_json("sign.json", signatures)
+
+def write_dict_to_json(filename: str, dict: dict):
+    with open(filename, "w") as outfile:
+        json_data = json.dumps(dict, indent=1)
+        outfile.write(json_data)
+
+
+def load_db(db_path: str):
+    db = None
+    try:
+        fp = open(db_path, "r")
+        db = json.load(fp)
+    except FileNotFoundError:
+        pass
+    return db
+
+
+def update_db(os2fingerprint: "dict[str, dict[str, list]]", fp_os: str, db: "dict[str, dict[str, list]] | None"):
+    if db is None:
+        return os2fingerprint
+
+    if fp_os not in db:
+        db[fp_os] = {"TCP/IP Features": [], "Ciphers Max Repeats": []}
+
+    tcp_ip_fp_set = set(db[fp_os]["TCP/IP Features"])
+
+    for tcp_ip_fp in os2fingerprint[fp_os]["TCP/IP Features"]:
+        tcp_ip_fp_set.add(tcp_ip_fp)
+
+    db[fp_os]["TCP/IP Features"] = list(tcp_ip_fp_set)
+
+    os2tls_fp = {}
+
+    for os in db.keys():
+        if os != fp_os:
+            os2tls_fp[os] = set(db[os]["Ciphers Max Repeats"])
+
+    tls_fp_set = set(db[fp_os]["Ciphers Max Repeats"])
+    
+    tls_fp_set.update(os2fingerprint[fp_os]["Ciphers Max Repeats"])
+    
+    for os, tls_fp in os2tls_fp.items():
+        tls_fp_set.difference_update(tls_fp)
+        tls_fp.difference_update(os2fingerprint[fp_os]["Ciphers Max Repeats"])
+    
+    db[fp_os]["Ciphers Max Repeats"] = list(tls_fp_set)
+    
+    for os, tls_fp in os2tls_fp.items():
+        db[os]["Ciphers Max Repeats"] = list(tls_fp)
+        
+    return db
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("You must provide a pcap file")
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("pcap", help="pcap file to process")
+    parser.add_argument("-o", "--os", required=True, action="store",
+                        help="Name of the operative system fingerprint to add to database")
+    parser.add_argument("-d", "--db", required=False, action="store", default="new_db.json",
+                        help="Databese json to read or create and add fingerprint")
+
+    args = parser.parse_args()
+
+    if args.os is None:
+        print("You need to specify a the operative system to fingerprint")
         sys.exit()
 
-    produce_sign(sys.argv[1])
+    fingerprint = None
+
+    with open(args.pcap, 'rb') as fp:
+        try:
+            capture = dpkt.pcap.Reader(fp)
+        except ValueError as pcap_err:
+            raise pcap_err
+        fingerprint = produce_fingeprint(capture)
+
+    if fingerprint is None:
+        print("No fingerprint detected")
+        sys.exit()
+
+    os2fingerprint = {args.os: fingerprint}
+
+    db = None
+    if not args.db is None:
+        db = load_db(args.db)
+
+    db = update_db(os2fingerprint, args.os, db)
+
+    write_dict_to_json(args.db, db)
 
 
 if __name__ == '__main__':
