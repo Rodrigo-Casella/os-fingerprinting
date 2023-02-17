@@ -19,8 +19,8 @@ def log(log_file, packets):
 
 
 def main():
-    # to capture only TCP SYN packets or Client Hello records in TLS Handshakes
-    bpf_filter = 'tcp[tcpflags] = tcp-syn or (tcp[tcp[12]/16*4]=22 and (tcp[tcp[12]/16*4+5]=1))'
+    # to capture only TCP SYN packets or Client Hello records in TLS Handshakes with VLAN tag
+    bpf_filter = "vlan and (tcp[tcpflags] = tcp-syn or (tcp[tcp[12]/16*4]=22 and (tcp[tcp[12]/16*4+5]=1)))"
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-i", "--interface", required=True,
@@ -41,7 +41,7 @@ def main():
     log_file = open(log_filename, "w")
 
     try:
-        sniff = Sniff(interface, promisc=1, filter=bpf_filter)
+        sniff = Sniff(interface, filters=bpf_filter, promisc=1, timeout=5000)
     except LibpcapError as e:
         print(e)
         exit(1)
@@ -73,8 +73,9 @@ def main():
 
                 tcp = ip.data
                 src_ip = socket.inet_ntoa(ip.src)
-
+                print(src_ip)
                 features = None
+                print(dpkt.tcp.tcp_flags_to_str(tcp.flags))
                 if tcp.flags == dpkt.tcp.TH_SYN:
                     tcp_opts = []
 
