@@ -1,3 +1,4 @@
 *.pcap
 *.json
 Pipfile*
+*.log
