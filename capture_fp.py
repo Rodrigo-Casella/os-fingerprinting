@@ -73,9 +73,7 @@ def main():
 
                 tcp = ip.data
                 src_ip = socket.inet_ntoa(ip.src)
-                print(src_ip)
                 features = None
-                print(dpkt.tcp.tcp_flags_to_str(tcp.flags))
                 if tcp.flags == dpkt.tcp.TH_SYN:
                     tcp_opts = []
 
