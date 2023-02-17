@@ -9,7 +9,7 @@ Script per catturare pacchetti TCP SYN e TLS Client Hello da scrivere in un file
 
 ## Usage
 
-<code>python3 capture_fp.py -i interface -d path/to/logs/dir [-l log_interval] [-t time]</code>
+<code>sudo -E python3 capture_fp.py -i interface -d path/to/logs/dir [-l log_interval] [-t time]</code>
 
 E' possibile configurare l'intervallo di log ed il tempo totale di cattura.
 
