@@ -15,7 +15,7 @@ E' possibile configurare l'intervallo di log ed il tempo totale di cattura.
 
 Example:
 
-<code>python3 gen_fingerprint.py -i eth0 -d logs</code>
+<code>sudo -E python3 gen_fingerprint.py -i eth0 -d logs</code>
 
 CTRL + C per arrestare lo script
 
