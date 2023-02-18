@@ -5,19 +5,26 @@ Script per catturare pacchetti TCP SYN e TLS Client Hello da scrivere in un file
 ## Requirements
 
 - Python 3.8+
+- <code>apt-get install libpcap-dev</code>
 - <code>python3 -m pip install -r requirements.txt</code>
 
 ## Usage
 
-<code>sudo -E python3 capture_fp.py -i interface -d path/to/logs/dir [-l log_interval] [-t time]</code>
+<code>sudo -E python3 capture_fp.py -i interface|pcap -d path/to/logs/dir [-l log_interval] [-t time]</code>
 
-E' possibile configurare l'intervallo di log ed il tempo totale di cattura.
+E' possibile configurare l'intervallo di log ed il tempo totale di cattura per le catture live.
 
 Example:
 
-<code>sudo -E python3 gen_fingerprint.py -i eth0 -d logs</code>
+<code>sudo -E python3 capture_fp.py -i eth0 -d logs</code>
 
 CTRL + C per arrestare lo script
+
+<code>sudo -E python3 capture_fp.py -i eth0 -d logs -l 60 -t 300</code>
+
+Viene prodotto un log ogni 60 secondi per un totale di 300 secondi
+
+<code>sudo -E python3 capture_fp.py -i capture.pcap -d logs</code>
 
 ## Output
 
