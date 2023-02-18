@@ -12,7 +12,7 @@ TLS_HANDSHAKE = 22
 TLS_CLIENT_HELLO = 1
 
 # to capture only TCP SYN packets or Client Hello records in TLS Handshakes with VLAN tag
-BPF_FILTER = "(tcp[tcpflags] = tcp-syn or (tcp[tcp[12]/16*4]=22 and (tcp[tcp[12]/16*4+5]=1)))"
+BPF_FILTER = "vlan and (tcp[tcpflags] = tcp-syn or (tcp[tcp[12]/16*4]=22 and (tcp[tcp[12]/16*4+5]=1)))"
 
 
 def log(log_file, packets):
