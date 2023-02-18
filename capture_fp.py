@@ -51,7 +51,7 @@ def read_pkt(packets: list, plen, buf):
         except dpkt.dpkt.NeedData:
             return
         
-        if record.data[0] == TLS_CLIENT_HELLO and int.from_bytes(record.data[1:4], byteorder='big') > 0:
+        if record.data[0] == TLS_CLIENT_HELLO and int.from_bytes(record.data[1:4], byteorder='big') >= 34:
             try:
                 handshake = dpkt.ssl.TLSHandshake(record.data)
             except dpkt.ssl.SSL3Exception or dpkt.dpkt.NeedData:
