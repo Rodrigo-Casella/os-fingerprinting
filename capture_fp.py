@@ -14,7 +14,6 @@ TLS_CLIENT_HELLO = 1
 # to capture only TCP SYN packets or Client Hello records in TLS Handshakes with VLAN tag
 BPF_FILTER = "vlan and (tcp[tcpflags] = tcp-syn or (tcp[tcp[12]/16*4]=22 and (tcp[tcp[12]/16*4+5]=1)))"
 
-
 def log(log_file, packets):
     if packets:
         for packet in packets:
@@ -29,14 +28,18 @@ def read_pkt(packets: list, plen, buf):
         eth = dpkt.ethernet.Ethernet(buf)
     except dpkt.dpkt.NeedData:
         return
+
     if not isinstance(eth.data, dpkt.ip.IP):
         return
+
     ip = eth.data
     if not isinstance(ip.data, dpkt.tcp.TCP):
         return
+
     tcp = ip.data
     src_ip = socket.inet_ntoa(ip.src)
     features = None
+
     if tcp.flags == dpkt.tcp.TH_SYN:
         tcp_opts = []
         
@@ -44,21 +47,26 @@ def read_pkt(packets: list, plen, buf):
             tcp_opts.append((opt[0], int.from_bytes(opt[1], 'big')))
             
         features = f"{ip.ttl},{tcp.win},{tcp_opts}"
-        
     elif len(tcp.data) > 0 and tcp.data[0] == TLS_HANDSHAKE:
         try:
             record = dpkt.ssl.TLSRecord(tcp.data)
         except dpkt.dpkt.NeedData:
             return
         
-        if record.data[0] == TLS_CLIENT_HELLO and int.from_bytes(record.data[1:4], byteorder='big') >= 34:
-            try:
-                handshake = dpkt.ssl.TLSHandshake(record.data)
-            except dpkt.ssl.SSL3Exception or dpkt.dpkt.NeedData:
-                return
+        if len(record.data) < 4:
+            return
+        
+        if record.data[0] != TLS_CLIENT_HELLO or int.from_bytes(record.data[1:4], byteorder='big') < 34:
+            return
+        
+        try:
+            handshake = dpkt.ssl.TLSHandshake(record.data)
+        except (dpkt.ssl.SSL3Exception, dpkt.dpkt.NeedData, dpkt.dpkt.UnpackError):
+            return
+        
+        client_hello: dpkt.ssl.TLSClientHello = handshake.data
             
-            client_hello: dpkt.ssl.TLSClientHello = handshake.data
-            features = f"{[x.code for x in client_hello.ciphersuites]}"
+        features = f"{[x.code for x in client_hello.ciphersuites]}"
             
     if features is not None:
         packets.append((src_ip, features))
