@@ -1,4 +1,3 @@
 -i https://pypi.org/simple
-cython==0.29.33
 dpkt==1.9.8
 python-libpcap==0.4.1

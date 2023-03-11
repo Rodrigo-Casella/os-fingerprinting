@@ -2,3 +2,4 @@
 *.json
 Pipfile*
 *.log
+*.txt
