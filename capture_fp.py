@@ -11,11 +11,6 @@ from pylibpcap.exception import LibpcapError
 TLS_HANDSHAKE = 22
 TLS_CLIENT_HELLO = 1
 
-
-def print_verbose(to_print, msg):
-    if to_print:
-        print(msg)
-        
 def log_pkts(log_file, packets):
     if packets:
         for packet in packets:
@@ -23,19 +18,22 @@ def log_pkts(log_file, packets):
         log_file.flush()
 
 
-def read_pkt(packets: list, plen, buf, verbose):
+def read_pkt(packets: list, plen, buf, verboseprint):
     if plen <= 0:
         return
     try:
         eth = dpkt.ethernet.Ethernet(buf)
-    except dpkt.dpkt.NeedData:
+    except dpkt.dpkt.NeedData as e:
+        verboseprint(e)
         return
 
     if not isinstance(eth.data, dpkt.ip.IP):
+        verboseprint("Not a IPv4 packet")
         return
 
     ip = eth.data
     if not isinstance(ip.data, dpkt.tcp.TCP):
+        verboseprint("Not a TCP packet")
         return
 
     tcp = ip.data
@@ -43,6 +41,7 @@ def read_pkt(packets: list, plen, buf, verbose):
     features = None
 
     if tcp.flags == dpkt.tcp.TH_SYN:
+        verboseprint("Got a TCP SYN packet")
         tcp_opts = []
 
         for opt in dpkt.tcp.parse_opts(tcp.opts):
@@ -50,20 +49,25 @@ def read_pkt(packets: list, plen, buf, verbose):
 
         features = f"{ip.ttl},{tcp.win},{tcp_opts}"
     elif len(tcp.data) > 0 and tcp.data[0] == TLS_HANDSHAKE:
+        verboseprint("Got a TLS HANDSHAKE packet")
         try:
             record = dpkt.ssl.TLSRecord(tcp.data)
-        except dpkt.dpkt.NeedData:
+        except dpkt.dpkt.NeedData as e:
+            verboseprint(e)
             return
 
         if len(record.data) < 4:
+            verboseprint("Record data too short")
             return
 
         if record.data[0] != TLS_CLIENT_HELLO or int.from_bytes(record.data[1:4], byteorder='big') < 34:
+            verboseprint("Not a TLS CLIENT HELLO packet")
             return
 
         try:
             handshake = dpkt.ssl.TLSHandshake(record.data)
-        except (dpkt.ssl.SSL3Exception, dpkt.dpkt.NeedData, dpkt.dpkt.UnpackError):
+        except (dpkt.ssl.SSL3Exception, dpkt.dpkt.NeedData, dpkt.dpkt.UnpackError) as e:
+            verboseprint(e)
             return
 
         client_hello: dpkt.ssl.TLSClientHello = handshake.data
@@ -72,24 +76,24 @@ def read_pkt(packets: list, plen, buf, verbose):
 
     if features is not None:
         pkt = f"{src_ip}: {features}"
-        print_verbose(verbose, pkt)
+        verboseprint(pkt)
         packets.append(pkt)
 
 
-def offline_capture(input: str, logs_dir, bpf_filter, verbose):
+def offline_capture(input: str, logs_dir, bpf_filter, verboseprint):
     capture = OpenPcap(input, mode="r", filters=bpf_filter)
 
     packets = []
     with open(f'{logs_dir}{os.sep}{os.path.basename(input.rstrip(".pcap"))}.log', mode="w") as log_file:
         try:
             for plen, ts, buf in capture.read():
-                read_pkt(packets, plen, buf, verbose)
+                read_pkt(packets, plen, buf, verboseprint)
             log_pkts(log_file, packets)
         except KeyboardInterrupt:
             pass
 
 
-def live_capture(input, tot_capture_time, log_interval, logs_dir, bpf_filter, verbose):
+def live_capture(input, tot_capture_time, log_interval, logs_dir, bpf_filter, verboseprint):
     try:
         sniff = Sniff(input, filters=bpf_filter, promisc=1, timeout=2000)
     except LibpcapError as e:
@@ -108,7 +112,7 @@ def live_capture(input, tot_capture_time, log_interval, logs_dir, bpf_filter, ve
             capture_end_time = capture_start_time + log_interval
             try:
                 for plen, ts, buf in sniff.capture():
-                    read_pkt(packets, plen, buf, verbose)
+                    read_pkt(packets, plen, buf, verboseprint)
                     if ts > capture_end_time:
                         break
                 log_pkts(log_file, packets)
@@ -123,15 +127,19 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("-i", "--input", required=True,
-                        help="network interface to capture packets from or pcap file to read")
+                        help="specify the network interface to capture packets from or pcap file to read")
     parser.add_argument("-d", "--dir", required=True,
-                        help="path to log dir")
+                        help="specify the path to the log directory")
     parser.add_argument("-l", "--log_interval", type=int, default=60,
-                        help="capture time before to flush the log file (in seconds)")
+                        help="capture time before flushing the log file and saving the log file (in seconds) (default: 60)")
     parser.add_argument("-t", "--time", type=int, default=0,
-                        help="total time to capture packets (in seconds)")
+                        help="total time to capture packets (in seconds) (default: 0 which means the capture will continue until CTRL-C)")
     parser.add_argument("-f", "--filter", type=str,
-                        help="bpf filter to apply (default will capture all tcp-syn and tls client hello packet with vlan tag)")
+                        help="specify a BPF filter to apply (default will capture all TCP-SYN and TLS Client Hello packets)")
+    parser.add_argument("-p", "--port", type=int,
+                        help="specify a TCP port from which to capture traffic")
+    parser.add_argument("-e", "--vlan_tag",
+                        help="enable capturing of VLAN tagged packets", action="store_true")
     parser.add_argument("-v", "--verbose",
                         help="enable verbose mode", action="store_true")
 
@@ -143,21 +151,32 @@ def main():
 
     logs_dir = args.dir
     
-    verbose = args.verbose
+    verboseprint = print if args.verbose else lambda *a, **k: None
 
-    # to capture only TCP SYN packets or Client Hello records in TLS Handshakes with VLAN tag
-    bpf_filter = "vlan and (tcp[tcpflags] = tcp-syn or (tcp[tcp[12]/16*4]=22 and (tcp[tcp[12]/16*4+5]=1)))"
+    # to capture only TCP SYN packets or Client Hello records in TLS Handshakes
+    bpf_filter = "(tcp[tcpflags] = tcp-syn or (tcp[tcp[12]/16*4]=22 and (tcp[tcp[12]/16*4+5]=1)))"
 
     if args.filter is not None:
         bpf_filter = args.filter
 
+    if args.vlan_tag:
+        bpf_filter = f'vlan and {bpf_filter}'
+    
+    if args.port:
+        bpf_filter = f'tcp port {args.port} and {bpf_filter}'
+    
+    verboseprint(f'Bpf filter is: {bpf_filter}')
+    
     if not os.path.isdir(logs_dir):
         os.makedirs(os.path.relpath(logs_dir), mode=0o755, exist_ok=True)
 
     if input.endswith(".pcap"):
-        offline_capture(input, logs_dir, bpf_filter, verbose)
+        verboseprint("Starting offline capture...")
+        offline_capture(input, logs_dir, bpf_filter, verboseprint)
     else:
-        live_capture(input, args.time, log_interval, logs_dir, bpf_filter, verbose)
+        verboseprint("Starting live capture...")
+        live_capture(input, args.time, log_interval,
+                     logs_dir, bpf_filter, verboseprint)
 
 
 if __name__ == '__main__':

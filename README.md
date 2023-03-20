@@ -1,6 +1,6 @@
 # os-fingerprinting
 
-Script per catturare pacchetti TCP SYN e TLS Client Hello da scrivere in un file di log.
+The script captures network packets either from a live network interface or a pcap file and logs TCP-SYN or TLS Client Hello parameters from each packet to multiples log files.
 
 ## Requirements
 
@@ -11,25 +11,37 @@ Script per catturare pacchetti TCP SYN e TLS Client Hello da scrivere in un file
 
 ## Usage
 
-<code>sudo -E python3 capture_fp.py -i interface|pcap -d path/to/logs/dir [-l log_interval] [-t time] [-f filter] [-v verbose]</code>
+<code>sudo -E python3 packet_capture.py [-h] -i INPUT -d DIR [-l LOG_INTERVAL] [-t TIME] [-f FILTER] [-p PORT] [-e] [-v]</code>
 
-E' possibile configurare l'intervallo di logging ed il tempo totale di cattura per le catture live ed il filtro da applicare.
+### Arguments
+- `-h, --help`: show the help message and exit
+- `-i INPUT, --input INPUT:` specify the network interface to capture packets from or pcap file to read
+- `-d DIR, --dir DIR`: specify the path to the log directory
+- `-l LOG_INTERVAL, --log_interval LOG_INTERVAL`: capture time before flushing the log file and saving the log file (in seconds) (default: 60)
+- `-t TIME, --time TIME`: total time to capture packets (in seconds) (default: 0 which means the capture will continue until interrupted)
+- `-f FILTER, --filter FILTER`: specify a BPF filter to apply (default will capture all TCP-SYN and TLS Client Hello packets)
+- `-p PORT, --port PORT`: specify a TCP port from which to capture traffic
+- `-e, --vlan_tag`: enable capturing of VLAN tagged packets
+- `-v, --verbose`: enable verbose mode
+### Examples:
 
-Example:
+Capture packets from a live network interface, log them to the `logs` directory and enable verbose mode:
 
-<code>sudo -E python3 capture_fp.py -i eth0 -d logs</code>
+<code>sudo -E python3 capture_fp.py -i eth0 -d logs -v</code>
 
-CTRL + C per arrestare lo script
+CTRL + C to stop the script
+
+Capture packets from a live network interface, log them to the `logs` directory and write a log file every `60` seconds for a total of `300` seconds:
 
 <code>sudo -E python3 capture_fp.py -i eth0 -d logs -l 60 -t 300</code>
 
-Viene prodotto un file log ogni 60 secondi per un totale di 300 secondi
+Capture packets from a pcap file, log them to the `logs` directory:
 
 <code>sudo -E python3 capture_fp.py -i capture.pcap -d logs</code>
 
 ## Output
 
-Lo script produce un file di log ogni <b>log_interval</b> secondi (60 secondi di default) in cui vengono riporati l'indirizzo IP sorgente assieme alla tupla \<ttl,window size,tcp options> o la lista dei cifrari presenti nel Client Hello
+Log file with source IP address and features of the packet, such as IP TTL, TCP window size, TCP option list or TLS ciphersuites:
 
 ```log
 [08/Mar/2023:12:41:07 +0100]
