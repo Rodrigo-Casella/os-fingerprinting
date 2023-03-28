@@ -4,3 +4,4 @@ Pipfile*
 *.log
 *.txt
 *.csv
+*.pdf

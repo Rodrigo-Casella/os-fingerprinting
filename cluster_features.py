@@ -9,6 +9,8 @@ import pandas as pd
 from sklearn.metrics.pairwise import pairwise_distances
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.metrics import silhouette_score
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 
 
 def hamming_distance(x, y):
@@ -41,18 +43,61 @@ def string2numpy(string):
     return array
 
 
+def make_pie_chart(work_dir, data: "dict[int, dict]"):
+    n_charts_per_page = 10
+
+    n_pages = (len(data) - 1) // n_charts_per_page + 1
+
+    with PdfPages(os.path.join(work_dir, 'pie_charts.pdf')) as pdf:
+        for page in range(n_pages):
+            start_idx = page * n_charts_per_page
+            end_idx = min(start_idx + n_charts_per_page, len(data))
+
+            fig, axs = plt.subplots(nrows=5, ncols=2, figsize=(8, 12), dpi=150)
+
+            for idx, entry in enumerate(list(data)[start_idx:end_idx]):
+                row_idx = idx // 2
+                col_idx = idx % 2
+
+                inner_dict = data[entry]
+                
+                for key, value in inner_dict.copy().items():
+                    if value == 0:
+                        del inner_dict[key]
+                    
+
+                axs[row_idx, col_idx].pie(inner_dict.values(), labels=inner_dict.keys(), autopct='%1.1f%%', textprops={'fontsize': 8})
+                
+                for i, key in enumerate(inner_dict.keys()):
+                    axs[row_idx, col_idx].text(2, i*0.5 - 1, f'{key}: {inner_dict[key]}', fontsize=8)
+                        
+                axs[row_idx, col_idx].set_title(entry, fontsize=10)
+                
+                axs[row_idx, col_idx].get_xaxis().set_visible(False)
+                axs[row_idx, col_idx].get_yaxis().set_visible(False)
+
+            n_unused = n_charts_per_page - (end_idx - start_idx)
+        
+            for i in range(n_unused):
+                row_idx = (end_idx - start_idx + i) // 2
+                col_idx = (end_idx - start_idx + i) % 2
+                axs[row_idx, col_idx].set_visible(False)
+            
+            plt.subplots_adjust(hspace=0.4, wspace=0.4)
+            
+            pdf.savefig(fig)
+            plt.close(fig)
+    
+    
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("features", type=str,
                         help="features file to read data to cluster")
     parser.add_argument("-d", "--dir", required=True,
                         help="dir where to store results")
-    """parser.add_argument("-k", "--clusters", required=True,
-                        type=int, help="number of initial cluster")"""
     args = parser.parse_args()
 
     features_filename: str = args.features
-    # n_clusters = args.clusters
 
     work_dir = args.dir
     os.makedirs(os.path.relpath(work_dir), mode=0o755, exist_ok=True)
@@ -126,10 +171,7 @@ def main():
     fp_df.to_csv(f'{os.path.join(work_dir, "signatures_" + clusters_file_basename)}.csv',
               index_label='Signature', sep=';')
     
-    clstr2occurr_df = pd.DataFrame.from_dict(cluster2occurance, orient='index')
-    
-    clstr2occurr_df.to_csv(f'{os.path.join(work_dir, "occurrance_" + clusters_file_basename)}.csv',
-              index_label='Cluster_ID', sep=';')
+    make_pie_chart(work_dir, cluster2occurance)
 
     with open(f'{os.path.join(work_dir, "clusters_" + clusters_file_basename)}.json', "w") as fp:
         json.dump(cluster2features, fp, indent=4,
