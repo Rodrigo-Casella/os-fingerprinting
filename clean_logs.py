@@ -10,13 +10,14 @@ from user_agents import parse
 GREASE = range(2570, 64251, 4112)
 
 TPL_REGEX_PATTERN = re.compile(r'\((\d+), (\d+)\)')
-TCP_OPT_TIMESTAMP = '8'
-TCP_OPT_MPTCP = '30'
-SKIP_VALUE_TCP_OPT = {TCP_OPT_TIMESTAMP, TCP_OPT_MPTCP}
+TCP_OPT_WS = '3'
+TCP_OPT_MMS = '2'
+SAVE_VALUE_TCP_OPT = {TCP_OPT_MMS, TCP_OPT_WS}
 
-UNIX_UAS = {'Debian', 'Ubuntu', 'CentOS', 'FreeBSD', 'Chrome OS'}
+# UNIX_UAS = {'Debian', 'Ubuntu', 'CentOS', 'FreeBSD', 'Chrome OS'}
 
-FEATURES_SET = {'tcp', 'tls', 'user_agent'}
+FEATURES_SET = ['user_agent', 'ttl', 'ws',
+                'mss', 'win_scale', 'tcp_opts', 'tls']
 
 IPV4_PATTERN = re.compile(r'^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}$')
 
@@ -25,14 +26,15 @@ def is_ipv4_address(ip_address_str):
     return IPV4_PATTERN.match(ip_address_str)
 
 
-def extract_cipher_list(feature: str) -> str:
+def extract_tls_features(feature: str) -> str:
     cipher_list = feature[1:-1].split(', ')
-    cipher_list = [cipher for cipher in cipher_list if int(cipher) not in GREASE]
-    return ','.join(cipher_list)
+    cipher_list = [cipher for cipher in cipher_list if int(
+        cipher) not in GREASE]
+    return '-'.join(cipher_list)
 
 
-def extract_tcp_ip_features(feature: str) -> str:
-    ttl_str, ws, tcp_opts_str = feature.split(',', maxsplit=2)
+def extract_tcp_ip_features(feature: str) -> "tuple[str, str, str, str, str]":
+    ttl_str, ws_str, tcp_opts_str = feature.split(',', maxsplit=2)
 
     ttl_int = int(ttl_str)
 
@@ -48,17 +50,18 @@ def extract_tcp_ip_features(feature: str) -> str:
     tpl_lst = TPL_REGEX_PATTERN.findall(tcp_opts_str)
 
     tcp_opts_str = ''
+    mss_str = '0'
+    win_scale_str = '0'
     for (option, value) in tpl_lst:
-        tcp_opts_str += f'{option},'
+        tcp_opts_str += f'{option}-'
 
-        if option in SKIP_VALUE_TCP_OPT:
-            continue
+        if option == TCP_OPT_MMS:
+            mss_str = value
 
-        if value != '0':
-            # tcp_opts_str = tcp_opts_str[:-1] + f'.{value},'
-            tcp_opts_str += f'{value},'
+        if option == TCP_OPT_WS:
+            win_scale_str = value
 
-    return f'{ttl_int},{ws},{tcp_opts_str[:-1]}'
+    return f'{ttl_int}', f'{ws_str}', f'{mss_str}', f'{win_scale_str}', f'{tcp_opts_str[:-1]}'
 
 
 def parse_features_file(host2features: "dict[str, dict[str, str]]", log_file):
@@ -66,24 +69,20 @@ def parse_features_file(host2features: "dict[str, dict[str, str]]", log_file):
         fp.readline()
         for line in fp:
             ip_string, feature = line.rstrip().split(": ")
-            feature_kind = 'tcp'
-
-            if feature.startswith("["):
-                feature_kind = 'tls'
-                feature = extract_cipher_list(feature)
-            else:
-                feature = extract_tcp_ip_features(feature)
 
             if ip_string not in host2features:
                 continue
 
-            if feature_kind not in host2features[ip_string]:
-                host2features[ip_string][feature_kind] = ''
-
-            if host2features[ip_string][feature_kind] != '':
-                continue
-
-            host2features[ip_string][feature_kind] = feature
+            host = host2features[ip_string]
+            if feature.startswith("["):
+                if host['tls'] != None:
+                    continue
+                host['tls'] = extract_tls_features(feature)
+            else:
+                if host['ttl'] != None:
+                    continue
+                host['ttl'], host['ws'], host['mss'], host['win_scale'], host['tcp_opts'] = extract_tcp_ip_features(
+                    feature)
 
 
 def parse_user_agent_file(host2features: "dict[str, dict[str, str]]", log_file):
@@ -99,21 +98,17 @@ def parse_user_agent_file(host2features: "dict[str, dict[str, str]]", log_file):
             if len(log_entry) < 2:
                 continue
 
-            os_name = parse(log_entry[-1]).os.family
+            ua = parse(log_entry[-1])
+            os_name = f'{ua.os.family}'.strip()
 
             if os_name != "Other":
 
                 if ip_string not in host2features:
-                    host2features[ip_string] = {}
+                    host2features[ip_string] = {
+                        feature: None for feature in FEATURES_SET}
 
-                if 'user_agent' not in host2features[ip_string]:
-                    host2features[ip_string]['user_agent'] = ''
-
-                if host2features[ip_string]['user_agent'] != '':
+                if host2features[ip_string]['user_agent'] != None:
                     continue
-
-                if os_name in UNIX_UAS:
-                    os_name = 'Linux'
 
                 host2features[ip_string]['user_agent'] = os_name
 
@@ -155,12 +150,10 @@ def main():
             parse_features_file(host2features, os.path.join(
                 features_log_dir, filename))
 
+    df = pd.DataFrame.from_dict(host2features, orient='index', columns=FEATURES_SET)
+    df.dropna(inplace=True)
+
     log_file_basename = os.path.basename(os.path.normpath(work_dir))
-
-    df = pd.DataFrame.from_dict(host2features, orient='index')
-
-    df.dropna(subset=FEATURES_SET, inplace=True)
-
     df.to_csv(f'{os.path.join(work_dir, "fingerprints_" + log_file_basename)}.csv',
               index_label='ip_src', sep=';')
 

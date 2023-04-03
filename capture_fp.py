@@ -1,6 +1,7 @@
 import argparse
 import os
 import socket
+import struct
 import time
 
 import dpkt
@@ -72,7 +73,19 @@ def read_pkt(packets: list, plen, buf, verboseprint):
 
         client_hello: dpkt.ssl.TLSClientHello = handshake.data
 
-        features = f"{[x.code for x in client_hello.ciphersuites]}"
+        extensions = []
+        supp_groups = []
+        for ext_type, ext_data in client_hello.extensions:
+            extensions.append(ext_type)
+            if ext_type == 10:
+                supp_groups_len = struct.unpack('!H', ext_data[:2])[0]
+                pointer = 2
+                while pointer <= supp_groups_len:
+                    supp_group = struct.unpack('!H', ext_data[pointer:pointer + 2])[0]
+                    pointer += 2
+                    supp_groups.append(supp_group)
+        
+        features = f"{[x.code for x in client_hello.ciphersuites]},{extensions},{supp_groups}"
 
     if features is not None:
         pkt = f"{src_ip}: {features}"
