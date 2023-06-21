@@ -5,3 +5,5 @@ Pipfile*
 *.txt
 *.csv
 *.pdf
+*.png
+__pycache__
