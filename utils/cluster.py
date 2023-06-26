@@ -1,6 +1,5 @@
 import json
 import os
-from matplotlib import pyplot as plt
 
 import numpy as np
 import pandas as pd
@@ -26,9 +25,12 @@ class Cluster:
         X = data.to_numpy()
         concatenated_row = data.apply(
             lambda row: ','.join(row.astype(str)), axis=1)
+        
         cluster_labels, n_clusters = self._cluster_data(X)
+
         cluster2fingerprint, cluster2occurance = self._build_cluster_dicts(
             dataframe, labels_column, concatenated_row, cluster_labels, n_clusters)
+        
         cluster_filename = "clusters_" + self.output
         make_charts(self.dir, cluster2occurance, cluster_filename)
         cluster_data = {cluster_id: {'Fingerprints': cluster2fingerprint[cluster_id],
@@ -39,11 +41,11 @@ class Cluster:
 
     def _cluster_data(self, X):
         X_enc = preprocessing.OrdinalEncoder().fit_transform(X)
-        print(len(X_enc))
         distance_matrix = pairwise_distances(
             X_enc, metric='hamming', n_jobs=-1, w=WEIGHTS)
         model = AgglomerativeClustering(
             metric="precomputed", linkage='average', compute_full_tree=False)
+        
         sample_range = range(2, len(X_enc))
         silhouette_avgs = []
         for n in sample_range:
@@ -51,6 +53,7 @@ class Cluster:
             model = model.fit(distance_matrix)
             silhouette_avgs.append(silhouette_score(
                 distance_matrix, model.labels_, metric='precomputed', random_state=0))
+            
         best_idx = np.argmax(silhouette_avgs)
         best_n_clusters = best_idx + 2
         model.set_params(n_clusters=best_n_clusters)
@@ -65,17 +68,21 @@ class Cluster:
         for cluster_id, elem in zip(cluster_labels, data_arr):
             cluster2data[cluster_id.item()].append(elem)
             data2cluster[elem] = cluster_id.item()
+
         labels = dataframe[labels_column].unique()
         cluster2occurance = {k: {label: 0 for label in labels}
                              for k in range(n_clusters)}
         cluster_ids = np.array([data2cluster[','.join(map(str, row[1:]))]
                                for row in dataframe.itertuples(index=False)])
+        
         occurance_counts = np.zeros(n_clusters)
         for cluster_id, label in zip(cluster_ids, dataframe[labels_column]):
             cluster2occurance[cluster_id][label] += 1
             occurance_counts[cluster_id] += 1
+
         threshold = np.percentile(occurance_counts, K_PERCENTILE)
         print(f"Threshold at {K_PERCENTILE}th perctile: {threshold:.1f}")
+        
         indices = np.where(occurance_counts < threshold)[0]
         cluster2data = {k: v for k, v in cluster2data.items()
                         if k not in indices}

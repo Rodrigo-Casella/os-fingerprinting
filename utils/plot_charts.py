@@ -8,7 +8,7 @@ def make_charts(work_dir, data: "dict[int, dict]", output):
     data_len = len(data)
     cols = 4
     rows = (data_len - 1) // cols + 1
-    _, axes = plt.subplots(nrows=rows, ncols=cols, figsize=(cols*4, rows*3))
+    _, axes = plt.subplots(nrows=rows, ncols=cols, figsize=(cols*5, rows*3))
 
     axes_flat = axes.flatten()
 
@@ -28,7 +28,7 @@ def make_charts(work_dir, data: "dict[int, dict]", output):
             legend_texts.append(f'{key}: {pct}')
 
         axs.legend(legend_texts, loc='center', bbox_to_anchor=(
-            1, 0), fontsize='medium', title=f'Cluster {category}')
+            1, 0), fontsize='xx-large', title=f'Cluster {category}')
 
         axs.axis('off')
         axs.set_aspect('equal')

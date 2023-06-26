@@ -37,21 +37,27 @@ def main():
     parser.add_argument("-d", "--dir", required=True,
                         help="dir where to store results")
     args = parser.parse_args()
+
     features_log_dir: str = os.path.join(args.logs_dir, 'features_logs')
     if not os.path.isdir(features_log_dir):
         print(f"The path '{features_log_dir}' is not a valid directory.")
         sys.exit(1)
+
     user_agent_log_dir: str = os.path.join(args.logs_dir, 'uas_logs')
     if not os.path.isdir(user_agent_log_dir):
         print(f"The path '{user_agent_log_dir}' is not a valid directory.")
         sys.exit(1)
+
     work_dir = args.dir
     os.makedirs(os.path.relpath(work_dir), mode=0o755, exist_ok=True)
+
     logs_dir_basename = os.path.basename(os.path.normpath(args.logs_dir))
     host2features = process_logs(features_log_dir, user_agent_log_dir)
+
     df = pd.DataFrame.from_dict(
-        host2features, orient='index', columns=FEATURES_SET).drop(columns=['extensions_list']).dropna()
+        host2features, orient='index', columns=FEATURES_SET).dropna()
     df.to_csv(f'{os.path.join(work_dir, logs_dir_basename)}.csv', index=False)
+    
     percentages = df['os_name'].value_counts(normalize=True) * 100
     plot_log_stats(work_dir, logs_dir_basename, percentages)
 

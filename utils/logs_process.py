@@ -56,8 +56,11 @@ def parse_features_file(host2features: "dict[str, dict[str, str]]", log_file):
             if feature.startswith("["):
                 if host['ciphersuites'] != None:
                     continue
-                host['ciphersuites'],  host['extensions_list'], host['supported_groups'] = extract_tls_features(
-                    feature)
+                feature_lst = extract_tls_features(feature)
+                if len(feature_lst) > 2:
+                    host['ciphersuites'],  host['extensions_list'], host['supported_groups'] = feature_lst
+                else:
+                    host['ciphersuites'], host['supported_groups'] = feature_lst
                 continue
             if host['ttl'] != None:
                 continue
@@ -79,6 +82,7 @@ def extract_tcp_ip_features(feature: str) -> "tuple[str, str, str, str, str]":
     ttl_int = 2 ** exponent
     if ttl_int > 255:
         ttl_int = 255
+        
     tpl_lst = TPL_REGEX_PATTERN.findall(tcp_opts_str)
     tcp_opts_str = ''
     maximumSegmentSize_str = '0'
