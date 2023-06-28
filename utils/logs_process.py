@@ -10,7 +10,7 @@ TCP_OPT_WS = '3'
 TCP_OPT_MMS = '2'
 SAVE_VALUE_TCP_OPT = {TCP_OPT_MMS, TCP_OPT_WS}
 
-UNIX_UAS = {'Debian', 'Ubuntu', 'CentOS', 'FreeBSD', 'Chrome OS', 'Android'}
+NOT_LINUX_UAS = {'Windows', 'Mac OS X', 'iOS', 'Linux'}
 
 FEATURES_SET = ['os_name', 'ttl', 'ws',
                 'mss', 'win_scale', 'tcp_opts', 'ciphersuites', 'extensions_list', 'supported_groups']
@@ -29,8 +29,7 @@ def parse_user_agent_file(log_file, hosts):
                 continue
             if ip_string in hosts:
                 continue
-            hosts[ip_string] = {
-                    feature: None for feature in FEATURES_SET}
+            hosts[ip_string] = {}
             log_entry = log_entry.split('\" \"', maxsplit=1)
             if len(log_entry) < 2:
                 del hosts[ip_string]
@@ -38,7 +37,7 @@ def parse_user_agent_file(log_file, hosts):
             user_agent = parse(log_entry[-1])
             os_name = f'{user_agent.os.family}'.strip()
             if os_name != "Other":
-                if os_name in UNIX_UAS:
+                if os_name not in NOT_LINUX_UAS:
                     os_name = 'Linux'
                 hosts[ip_string]['os_name'] = os_name
                 continue
@@ -54,7 +53,7 @@ def parse_features_file(host2features: "dict[str, dict[str, str]]", log_file):
                 continue
             host = host2features[ip_string]
             if feature.startswith("["):
-                if host['ciphersuites'] != None:
+                if host.get('ciphersuites', None):
                     continue
                 feature_lst = extract_tls_features(feature)
                 if len(feature_lst) > 2:
@@ -62,7 +61,7 @@ def parse_features_file(host2features: "dict[str, dict[str, str]]", log_file):
                 else:
                     host['ciphersuites'], host['supported_groups'] = feature_lst
                 continue
-            if host['ttl'] != None:
+            if host.get('ttl', None):
                 continue
             host['ttl'], host['ws'], host['mss'], host['win_scale'], host['tcp_opts'] = extract_tcp_ip_features(
                 feature)

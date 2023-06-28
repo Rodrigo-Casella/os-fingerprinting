@@ -55,7 +55,7 @@ def main():
     host2features = process_logs(features_log_dir, user_agent_log_dir)
 
     df = pd.DataFrame.from_dict(
-        host2features, orient='index', columns=FEATURES_SET).dropna()
+        host2features, orient='index').dropna()
     df.to_csv(f'{os.path.join(work_dir, logs_dir_basename)}.csv', index=False)
     
     percentages = df['os_name'].value_counts(normalize=True) * 100
