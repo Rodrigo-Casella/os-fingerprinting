@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-def make_charts(work_dir, data: "dict[int, dict]", output):
+def make_charts(data: "dict[int, dict]", save_path: str):
     data_len = len(data)
     cols = 4
     rows = (data_len - 1) // cols + 1
@@ -23,8 +23,8 @@ def make_charts(work_dir, data: "dict[int, dict]", output):
 
         legend_texts = []
         for key, pct in zip(labels, values):
-            pct = f'{pct:.1f}%'
             subcategories[key] = pct
+            pct = f'{pct:.1f}%'
             legend_texts.append(f'{key}: {pct}')
 
         axs.legend(legend_texts, loc='center', bbox_to_anchor=(
@@ -40,4 +40,4 @@ def make_charts(work_dir, data: "dict[int, dict]", output):
             axes_flat[idx].set_visible(False)
 
     plt.tight_layout()
-    plt.savefig(os.path.join(work_dir, f'{output}_pie_charts.png'))
+    plt.savefig(f'{save_path}.png')

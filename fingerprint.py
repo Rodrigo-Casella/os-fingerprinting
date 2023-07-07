@@ -1,109 +1,142 @@
 import argparse
 import json
-import math
 import os
-import sys
 import time
+from matplotlib import gridspec
 
 import numpy as np
 import pandas as pd
-from utils.capture import Capture
-from utils.pkt_process import process_pkt
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.metrics import confusion_matrix, precision_recall_fscore_support, accuracy_score
 
-FEATURES_SET = {'ttl', 'tcp_window', 'mss', 'win_scale',
-                'tcp_opts', 'ciphersuites', 'supp_groups'}
-
-COMPLETE_FLOW = {'ttl', 'tcp_window', 'tcp_opts', 'ciphersuites', 'supp_groups'}
-
-BPF_FILTER = "tcp port 443 and (tcp[tcpflags] = tcp-syn or (tcp[tcp[12]/16*4]=22 and (tcp[tcp[12]/16*4+5]=1)))"
-
-TCP_OPT_MMS = 2
-TCP_OPT_WS = 3
-
-GREASE = range(2570, 64251, 4112)
+FEATURES_SET = ['ttl', 'tcp_window', 'mss', 'win_scale',
+                'tcp_opts', 'ciphersuites', 'supp_groups']
+MOST_WEIGHT = {'tcp_opts', 'ciphersuites', 'supp_groups'}
+WEIGHTS = np.array([1, 1, 1, 1, 5, 5, 5])
 
 
-def json2dict(filename):
-    with open(filename, "r") as fp:
-        clusters_dict = json.load(fp)
+def json2dict(clusters_dict: dict):
+    database = {}
+    for _, data in clusters_dict.items():
+        for signature in data['Fingerprints']:
+            database[signature] = data['Os']
+
     return clusters_dict
 
 
-def key_from_flow(flow):
-    return f"{flow['src_ip']}:{flow['src_port']}"
+def json2mod_dict(clusters_dict: dict):
+    generic_clusters = {k: {feature: set() for feature in FEATURES_SET}
+                        for k in clusters_dict}
+
+    for k, cluster_data in clusters_dict.items():
+        generic_clusters[k]['Os'] = cluster_data['Os']
+
+        for signature in cluster_data['Fingerprints']:
+            values = signature.split(",")
+
+            for feature, value in zip(FEATURES_SET, values):
+                generic_clusters[k][feature].add(value)
+
+    return generic_clusters
 
 
-def de_grease_tls(lst):
-    return '-'.join([f"{elem}" for elem in lst if elem not in GREASE])
+def plot_confusion_matrix(actual_labels, pred_labels, class_names, img_name):
+    cfm = confusion_matrix(actual_labels, pred_labels)
 
+    precision, recall, f1_score, _ = precision_recall_fscore_support(
+        actual_labels, pred_labels, average=None)
+    accuracy = accuracy_score(actual_labels, pred_labels)
+    precision_str = [f"{value:.4f}" for value in precision]
+    recall_str = [f"{value:.4f}" for value in recall]
+    f1_score_str = [f"{value:.4f}" for value in f1_score]
 
-def flow2str_repr(flow):
-    exponent = math.ceil(math.log2(int(flow['ttl'])))
-    flow['ttl'] = 2 ** exponent
-    if flow['ttl'] > 255:
-        flow['ttl'] = 255
-    flow['win_scale'] = 0
-    flow['mss'] = 0
-    tcp_opts_str = ''
-    for (type, value) in flow['tcp_opts']:
-        tcp_opts_str += f"{type}-"
-        if type == TCP_OPT_MMS:
-            flow['mss'] = value
-        if type == TCP_OPT_WS:
-            flow['win_scale'] = value
-    flow['tcp_opts'] = tcp_opts_str[:-1]
-    flow['ciphersuites'] = de_grease_tls(flow['ciphersuites'])
-    flow['supp_groups'] = de_grease_tls(flow['supp_groups'])
-    return f"{flow['ttl']},{flow['tcp_window']},{flow['mss']},{flow['win_scale']},{flow['tcp_opts']},{flow['ciphersuites']},{flow['supp_groups']}"
+    metrics_df = pd.DataFrame({
+        'Precision': precision_str,
+        'Recall': recall_str,
+        'F1-score': f1_score_str
+    }, index=class_names)
+
+    fig = plt.figure(figsize=(10, 5))
+    gs = gridspec.GridSpec(1, 2, width_ratios=[2, 1])
+
+    ax0 = plt.subplot(gs[0])
+    sns.heatmap(cfm, annot=True, cmap='Blues', fmt='g',
+                xticklabels=class_names, yticklabels=class_names)
+    ax0.set_xlabel('Predicted')
+    ax0.set_ylabel('Actual')
+    ax0.set_title('Confusion Matrix')
+
+    ax1 = plt.subplot(gs[1])
+    table = ax1.table(cellText=metrics_df.values, colLabels=metrics_df.columns,
+                      rowLabels=metrics_df.index, loc='center')
+    ax1.annotate(f'Accuracy: {(accuracy * 100):.2f}%',
+                 xy=(0.5, -0.05), xycoords='axes fraction', ha='center')
+    table.scale(1.0, 4.0)
+    ax1.axis('off')
+    ax1.set_title('Metrics')
+
+    plt.savefig(f'{img_name}', bbox_inches='tight')
 
 
 class Fingerprinter:
 
-    def __init__(self, database, output_dir):
-        self.database = json2dict(database)
+    def __init__(self, clusters_filename, output_dir):
+        clusters_dict = {}
+        with open(clusters_filename, "r") as fp:
+            clusters_dict: dict = json.load(fp)
+
+        self.database = json2dict(clusters_dict)
+        self.mod_database = json2mod_dict(clusters_dict)
         self.output_dir = output_dir
         self.flows = {}
         self.fingerprints = []
 
+    def _search_fingerprint_in_db(self, fp_str) -> str:
+        fingerprint = self.database.get(fp_str, None)
 
-    def process(self, input):
-        handler = Capture(input, filter=BPF_FILTER, immediate_mode=True, timeout=50)
-        try:
-            for _, buf in handler.read():
-                flow = process_pkt(buf)
-                if not flow:
-                    continue        
-                flow_key = key_from_flow(flow)
-                if flow_key in self.flows:
-                    if 'ttl' in self.flows[flow_key] and 'ciphersuites' in flow:
-                        self.flows[flow_key] = {**self.flows[flow_key], **flow}
-                        flow_repr = flow2str_repr(self.flows[flow_key])
-                        self._search_fingerprint(flow_key, flow_repr)
-                    del self.flows[flow_key]
-                    continue
-                self.flows.update({flow_key: flow})
-        except KeyboardInterrupt:
-            pass
-        for flow_key in self.flows:
-            if self.flows[flow_key].keys() >= COMPLETE_FLOW:
-                flow_repr = flow2str_repr(self.flows[flow_key])
-                self._search_fingerprint(flow_key, flow_repr)
-        df = pd.DataFrame(self.fingerprints)
-        df['flow_key'] = df['flow_key'].str.split(':').str[0]
-        df.drop_duplicates(inplace=True)
+        if fingerprint is None:
+            max_score = 0
+            most_similar_cluster = -1
+
+            for cluster_id, cluster_data in self.mod_database.items():
+                curr_score = 0
+
+                for feature, value in zip(FEATURES_SET, fp_str.split(",")):
+                    if value in cluster_data[feature]:
+                        if feature in MOST_WEIGHT:
+                            curr_score += 5
+                            continue
+                        curr_score += 1
+
+                if curr_score > max_score:
+                    max_score = curr_score
+                    most_similar_cluster = cluster_id
+
+            fingerprint = self.mod_database[most_similar_cluster]['Os']
+
+        return fingerprint
+
+    def process_csv(self, input):
+        df = pd.read_csv(input)
+
+        for row in df.itertuples(index=False):
+            fp = ','.join(map(str, row[1:]))
+            self.fingerprints.append(self._search_fingerprint_in_db(fp))
+
+        df['match'] = self.fingerprints
+
+        actual_labels = df['os_name'].values
+        predicted_labels = df['match'].values
+        class_names = np.unique(actual_labels)
+
         outfile = os.path.splitext(os.path.basename(input))[0]
-        df.to_csv(f"{os.path.join(self.output_dir, outfile)}_fp.csv", sep=';', na_rep='Nan', index=False)
+        df.to_csv(os.path.join(self.output_dir,
+                  f"{outfile}_fp.csv"), index=False)
 
-
-    def _search_fingerprint(self, flow_key, fp_str):
-        fingerprint = {'flow_key' : flow_key, 'match': "No match in db", 'cluster_id': -1, 'fp_repr': fp_str}
-        for cluster_id in self.database:
-            if fp_str in self.database[cluster_id]['Fingerprints']:
-                fingerprint['cluster_id'] = cluster_id
-                fingerprint['match'] = f"{[f'{k}: {v}' for k, v in self.database[cluster_id]['Os_percetange'].items()]}"
-                break
-        self.fingerprints.append(fingerprint)
-        return
+        img_name = os.path.join(self.output_dir, f"{outfile}_cf.png")
+        plot_confusion_matrix(
+            actual_labels, predicted_labels, class_names, img_name)
 
 
 def main():
@@ -111,16 +144,16 @@ def main():
     parser.add_argument("json", type=str,
                         help="json file of the db")
     parser.add_argument("-i", "--input", required=True,
-                        help="specify the network interface to capture packets from or pcap file to read")
+                        help="csv file to read and classify")
     parser.add_argument("-d", "--dir", required=True,
                         help="dir where to store results")
     args = parser.parse_args()
-    database_file = args.json
+
     work_dir = args.dir
     os.makedirs(os.path.relpath(work_dir), mode=0o755, exist_ok=True)
-    fingerprinter = Fingerprinter(database_file, output_dir=args.dir)
-    fingerprinter.process(args.input)
-    
+
+    fingerprinter = Fingerprinter(args.json, output_dir=args.dir)
+    fingerprinter.process_csv(args.input)
 
 
 if __name__ == '__main__':
